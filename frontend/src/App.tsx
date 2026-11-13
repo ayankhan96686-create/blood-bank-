@@ -14,6 +14,77 @@ const API_BASE = "http://localhost:8000";
 type RoleType = 'blood_bank_admin' | 'clinical_staff' | 'lab_staff' | 'regulatory_auditor';
 type TabType = 'stock_ledger' | 'donor_registry' | 'tti_lab' | 'hospital_requisitions' | 'ai_forecasting' | 'audit_devops';
 
+const REPORT_DEFINITIONS: Record<'operational' | 'management' | 'exceptions', Array<{
+  key: string;
+  title: string;
+  regulatory_basis: string;
+  description: string;
+  sql_query: string;
+}>> = {
+  operational: [
+    {
+      key: 'usable_inventory',
+      title: 'Form 27-C: Usable Inventory by Equipment',
+      regulatory_basis: 'Drugs & Cosmetics Act Schedule F Part XII-B',
+      description: 'Statutory ledger of ready-to-transfuse screened blood units grouped by cold-chain equipment and ABO/Rh.',
+      sql_query: "SELECT loc.storage_code, loc.facility_zone, u.blood_group, u.component_type, COUNT(u.unit_id) as count FROM blood_units u JOIN inventory_locations loc ON u.location_id = loc.location_id WHERE u.status = 'Available' AND datetime(u.expiry_date) > datetime('now') GROUP BY loc.storage_code, loc.facility_zone, u.blood_group, u.component_type ORDER BY count DESC LIMIT 8;"
+    },
+    {
+      key: 'screening_queue',
+      title: 'Diagnostic Quarantine & TTI Screening Queue',
+      regulatory_basis: 'NACO & Schedule F Mandatory Testing Protocol',
+      description: 'Inventory units quarantined pending completion of mandatory 5-marker serology (HIV, HBsAg, HCV, Syphilis, Malaria).',
+      sql_query: "SELECT u.unit_barcode, u.blood_group, u.component_type, u.collection_date, COALESCE(t.overall_result, 'Pending') as test_status FROM blood_units u LEFT JOIN laboratory_tests t ON u.unit_id = t.unit_id WHERE u.status = 'Quarantined' ORDER BY u.collection_date ASC LIMIT 10;"
+    },
+    {
+      key: 'emergency_requisitions',
+      title: 'Active STAT Emergency Hospital Requisitions',
+      regulatory_basis: 'Hospital Transfusion Committee (HTC) Audit Protocol',
+      description: 'Critical emergency requests from trauma centers requiring prioritized biological crossmatching.',
+      sql_query: "SELECT r.request_code, h.hospital_name, r.blood_group, r.component_type, r.requested_qty, r.allocated_qty, r.priority FROM blood_requests r JOIN hospitals h ON r.hospital_id = h.hospital_id WHERE r.request_status IN ('Pending', 'Partially_Allocated') AND r.priority = 'Emergency' ORDER BY r.required_by_date ASC LIMIT 10;"
+    }
+  ],
+  management: [
+    {
+      key: 'hospital_sla',
+      title: 'Hospital Requisition Fulfillment SLA & Equity',
+      regulatory_basis: 'State Blood Transfusion Council (SBTC) Standards',
+      description: 'Audits fulfillment ratios, demanded units, and fulfillment percentages across regional health centers.',
+      sql_query: "SELECT h.hospital_name, h.city, COUNT(r.request_id) as total_requests, SUM(r.requested_qty) as demanded, SUM(r.allocated_qty) as fulfilled, ROUND((SUM(r.allocated_qty)*100.0) / NULLIF(SUM(r.requested_qty),0), 1) as fulfillment_pct FROM hospitals h LEFT JOIN blood_requests r ON h.hospital_id = r.hospital_id GROUP BY h.hospital_id, h.hospital_name, h.city ORDER BY total_requests DESC LIMIT 10;"
+    },
+    {
+      key: 'component_wastage',
+      title: 'Monthly Component Wastage & Discards Ledger',
+      regulatory_basis: 'NABH Accreditation Standard BPS.14',
+      description: 'Categorized component discards attributed to shelf-life expiry, biohazard serological reactivity, and cold chain breach.',
+      sql_query: "SELECT component_type, COUNT(*) as total_units, SUM(CASE WHEN status = 'Expired' THEN 1 ELSE 0 END) as expired_count, SUM(CASE WHEN status = 'Biohazard_Quarantined' THEN 1 ELSE 0 END) as biohazard_count, SUM(CASE WHEN status = 'Transfused' THEN 1 ELSE 0 END) as transfused_count FROM blood_units GROUP BY component_type;"
+    },
+    {
+      key: 'top_donors',
+      title: 'Frequent Voluntary Donor Recognition Ledger',
+      regulatory_basis: 'National Voluntary Blood Donation Day Registry',
+      description: 'Master list of recognized voluntary blood donors sorted by verified lifetime donations and volume.',
+      sql_query: "SELECT d.donor_code, d.full_name, d.blood_group, d.city, COUNT(dn.donation_id) as total_donations, SUM(dn.volume_ml) as total_volume_ml FROM donors d JOIN donations dn ON d.donor_id = dn.donor_id WHERE dn.collection_status = 'Successful' GROUP BY d.donor_id ORDER BY total_donations DESC LIMIT 10;"
+    }
+  ],
+  exceptions: [
+    {
+      key: 'expiring_48h',
+      title: 'Critical 48-Hour Component Expiry Alert',
+      regulatory_basis: 'FEFO Protocol & Quality Assurance Guidelines',
+      description: 'High-risk inventory units reaching legal shelf-life limits within 48 hours requiring expedited dispatch.',
+      sql_query: "SELECT u.unit_barcode, u.blood_group, u.component_type, loc.storage_code, u.expiry_date FROM blood_units u JOIN inventory_locations loc ON u.location_id = loc.location_id WHERE u.status = 'Available' AND datetime(u.expiry_date) BETWEEN datetime('now') AND datetime('now', '+2 days') ORDER BY u.expiry_date ASC LIMIT 15;"
+    },
+    {
+      key: 'cold_chain_breaches',
+      title: 'Cold-Chain Equipment Temperature Deviation Log',
+      regulatory_basis: 'Drugs & Cosmetics Rules Schedule F (Part XII-B)',
+      description: 'Audit trail of automated alarm events triggered when storage units exceeded licensed temperature envelopes.',
+      sql_query: "SELECT loc.storage_code, loc.facility_zone, loc.min_temp_c, loc.max_temp_c, loc.current_temp_c, COUNT(cce.event_seq_no) as breach_count FROM inventory_locations loc JOIN cold_chain_events cce ON loc.location_id = cce.location_id WHERE cce.alert_triggered = 1 GROUP BY loc.location_id ORDER BY breach_count DESC LIMIT 8;"
+    }
+  ]
+};
+
 export default function App() {
   // Navigation & Security Role State
   const [activeTab, setActiveTab] = useState<TabType>('stock_ledger');
@@ -29,7 +100,7 @@ export default function App() {
 
   const [reports, setReports] = useState<any>(null);
   const [selectedReportCat, setSelectedReportCat] = useState<'operational' | 'management' | 'exceptions'>('operational');
-  const [selectedReportKey, setSelectedReportKey] = useState<string>('');
+  const [selectedReportKey, setSelectedReportKey] = useState<string>('usable_inventory');
 
   const [donors, setDonors] = useState<any[]>([]);
   const [donorSearch, setDonorSearch] = useState('');
@@ -108,9 +179,6 @@ export default function App() {
       if (repRes.ok) {
         const repData = await repRes.json();
         setReports(repData);
-        if (!selectedReportKey && repData.operational && repData.operational.length > 0) {
-          setSelectedReportKey(repData.operational[0].name);
-        }
       }
       if (locRes.ok) setColdChainLocations(await locRes.json());
       if (reqRes.ok) setRequests(await reqRes.json());
@@ -444,12 +512,13 @@ export default function App() {
 
   // Filtered Inventory Units
   const filteredUnits = useMemo(() => {
+    if (!Array.isArray(liveUnits)) return [];
     return liveUnits.filter(unit => {
       const matchBg = invFilterBg === 'ALL' || unit.blood_group === invFilterBg;
       const matchComp = invFilterComp === 'ALL' || unit.component_type === invFilterComp;
       const matchSearch = !invSearch || 
-        unit.unit_barcode.toLowerCase().includes(invSearch.toLowerCase()) ||
-        unit.blood_group.toLowerCase().includes(invSearch.toLowerCase()) ||
+        (unit.unit_barcode && unit.unit_barcode.toLowerCase().includes(invSearch.toLowerCase())) ||
+        (unit.blood_group && unit.blood_group.toLowerCase().includes(invSearch.toLowerCase())) ||
         (unit.storage_code && unit.storage_code.toLowerCase().includes(invSearch.toLowerCase()));
       return matchBg && matchComp && matchSearch;
     });
@@ -457,13 +526,22 @@ export default function App() {
 
   // Filtered Requisitions
   const filteredRequests = useMemo(() => {
+    if (!Array.isArray(requests)) return [];
     return requests.filter(r => reqPriorityFilter === 'ALL' || r.priority === reqPriorityFilter);
   }, [requests, reqPriorityFilter]);
 
-  // Selected Report Object
+  // Selected Report Object & Live Data Resolver
   const currentReportObj = useMemo(() => {
-    if (!reports || !reports[selectedReportCat]) return null;
-    return reports[selectedReportCat].find((r: any) => r.name === selectedReportKey) || reports[selectedReportCat][0];
+    const list = REPORT_DEFINITIONS[selectedReportCat] || [];
+    return list.find(r => r.key === selectedReportKey) || list[0];
+  }, [selectedReportCat, selectedReportKey]);
+
+  const currentReportData = useMemo(() => {
+    if (!reports || typeof reports !== 'object') return [];
+    const catObj = reports[selectedReportCat];
+    if (!catObj || typeof catObj !== 'object') return [];
+    const rows = catObj[selectedReportKey];
+    return Array.isArray(rows) ? rows : [];
   }, [reports, selectedReportCat, selectedReportKey]);
 
   return (
@@ -815,9 +893,8 @@ export default function App() {
                         key={cat}
                         onClick={() => {
                           setSelectedReportCat(cat);
-                          if (reports && reports[cat] && reports[cat].length > 0) {
-                            setSelectedReportKey(reports[cat][0].name);
-                          }
+                          const firstKey = REPORT_DEFINITIONS[cat]?.[0]?.key || '';
+                          setSelectedReportKey(firstKey);
                         }}
                         className={`px-2 py-0.5 text-[11px] font-medium rounded transition uppercase ${
                           selectedReportCat === cat ? 'bg-[#0F172A] text-white' : 'text-slate-600 hover:text-slate-900'
@@ -835,8 +912,8 @@ export default function App() {
                     onChange={(e) => setSelectedReportKey(e.target.value)}
                     className="bg-white border border-[#CBD5E1] text-[12px] text-slate-800 rounded px-2 py-1 outline-none font-medium"
                   >
-                    {reports && reports[selectedReportCat] && reports[selectedReportCat].map((r: any) => (
-                      <option key={r.name} value={r.name}>
+                    {(REPORT_DEFINITIONS[selectedReportCat] || []).map(r => (
+                      <option key={r.key} value={r.key}>
                         {r.title}
                       </option>
                     ))}
@@ -846,17 +923,45 @@ export default function App() {
 
               {/* Selected Statutory Report Details Box */}
               {currentReportObj && (
-                <div className="bg-[#FFFFFF] border border-[#CBD5E1] rounded-[3px] p-3 text-[12px] space-y-1">
-                  <div className="flex items-center justify-between">
+                <div className="bg-[#FFFFFF] border border-[#CBD5E1] rounded-[3px] p-3 text-[12px] space-y-2">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
                     <span className="font-semibold text-slate-900 font-mono text-[13px]">{currentReportObj.title}</span>
                     <span className="text-[10px] font-mono bg-slate-100 text-slate-700 border border-slate-300 px-1.5 py-0.5 rounded">
-                      Regulatory Basis: {currentReportObj.regulatory_basis || "Schedule F Part XII-B"}
+                      Regulatory Basis: {currentReportObj.regulatory_basis}
                     </span>
                   </div>
                   <div className="text-slate-600 text-[11px]">{currentReportObj.description}</div>
-                  <div className="font-mono text-[10px] text-slate-500 bg-slate-50 p-2 rounded border border-slate-200 mt-1">
-                    {currentReportObj.sql_query || "SELECT * FROM v_stock_balance_by_group;"}
+                  <div className="font-mono text-[10px] text-slate-500 bg-slate-50 p-2 rounded border border-slate-200">
+                    <code>{currentReportObj.sql_query}</code>
                   </div>
+
+                  {/* Real rows from PostgreSQL if available */}
+                  {currentReportData.length > 0 && (
+                    <div className="mt-2 border border-[#CBD5E1] rounded overflow-x-auto max-h-48 overflow-y-auto">
+                      <table className="w-full text-[11px] text-left border-collapse font-mono">
+                        <thead className="sticky top-0 bg-[#F1F5F9] border-b border-[#CBD5E1] text-slate-600">
+                          <tr>
+                            {Object.keys(currentReportData[0]).map(col => (
+                              <th key={col} className="py-1 px-2 border-r border-[#CBD5E1] uppercase">
+                                {col.replace(/_/g, ' ')}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#E2E8F0]">
+                          {currentReportData.map((row: any, i: number) => (
+                            <tr key={i} className="hover:bg-slate-50">
+                              {Object.values(row).map((val: any, j: number) => (
+                                <td key={j} className="py-1 px-2 border-r border-[#CBD5E1] text-slate-800">
+                                  {String(val)}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               )}
 

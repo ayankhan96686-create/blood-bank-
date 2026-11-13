@@ -15,3 +15,4 @@ echo Workstation is starting up!
 echo - Frontend UI: http://localhost:5173
 echo - Backend API: http://localhost:8000 (Swagger docs: http://localhost:8000/docs)
 echo ===============================================================================
+
