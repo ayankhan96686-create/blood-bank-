@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+*/node_modules/
+package-lock.json
+
+# Build outputs
+dist/
+build/
+*/dist/
+*/build/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+*.egg-info/
+
+# Databases & logs (exclude local temp lock files, but preserve schema, seeds & tests)
+*.log
+.DS_Store
+Thumbs.db
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo

@@ -1,0 +1,16 @@
+-- Rollback: U1__rollback_core_tables.sql
+DROP TABLE IF EXISTS ai_shortage_forecasts CASCADE;
+DROP TABLE IF EXISTS audit_logs CASCADE;
+DROP TABLE IF EXISTS transfusions CASCADE;
+DROP TABLE IF EXISTS allocations CASCADE;
+DROP TABLE IF EXISTS blood_requests CASCADE;
+DROP TABLE IF EXISTS hospitals CASCADE;
+DROP TABLE IF EXISTS cold_chain_events CASCADE;
+DROP TABLE IF EXISTS laboratory_tests CASCADE;
+DROP TABLE IF EXISTS blood_units CASCADE;
+DROP TABLE IF EXISTS donations CASCADE;
+DROP TABLE IF EXISTS donors CASCADE;
+DROP TABLE IF EXISTS inventory_locations CASCADE;
+DROP TABLE IF EXISTS technicians CASCADE;
+DROP TABLE IF EXISTS schema_versions CASCADE;
+

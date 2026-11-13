@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: blood_bank_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: blood_bank_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_secure_password_2026
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/schema/full_schema.sql:/docker-entrypoint-initdb.d/01_full_schema.sql
+      - ./database/views/all_views.sql:/docker-entrypoint-initdb.d/02_all_views.sql
+      - ./database/functions/fn_check_compatibility.sql:/docker-entrypoint-initdb.d/03_functions.sql
+      - ./database/triggers:/docker-entrypoint-initdb.d/triggers
+      - ./database/procedures/sp_allocate_blood_units.sql:/docker-entrypoint-initdb.d/05_procedures.sql
+      - ./database/security/rbac_roles.sql:/docker-entrypoint-initdb.d/06_rbac.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d blood_bank_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: blood_bank_pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@itmuniversity.ac.in
+      PGADMIN_DEFAULT_PASSWORD: admin_secure_pass
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: blood_bank_backend
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres_secure_password_2026@postgres:5432/blood_bank_db
+      PORT: 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: blood_bank_frontend
+    restart: always
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+
